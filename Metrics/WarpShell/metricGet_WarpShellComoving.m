@@ -81,11 +81,11 @@ P = TOVconstDensity(R2,M,rho,rsample);
 Metric.params.P = P;
 
 % smooth functions
-rho = smooth(smooth(smooth(smooth(rho,1.79*smoothFactor),1.79*smoothFactor),1.79*smoothFactor),1.79*smoothFactor);
+rho = movingAverageSmooth(movingAverageSmooth(movingAverageSmooth(movingAverageSmooth(rho,1.79*smoothFactor),1.79*smoothFactor),1.79*smoothFactor),1.79*smoothFactor);
 rho = rho';
 Metric.params.rhosmooth = rho;
 
-P = smooth(smooth(smooth(smooth(P,smoothFactor),smoothFactor),smoothFactor),smoothFactor);
+P = movingAverageSmooth(movingAverageSmooth(movingAverageSmooth(movingAverageSmooth(P,smoothFactor),smoothFactor),smoothFactor),smoothFactor);
 P = P';
 Metric.params.Psmooth = P;
 
@@ -101,7 +101,7 @@ Metric.params.rVec = rsample;
 
 % set shift line vector
 shiftRadialVector = compactSigmoid(rsample,R1,R2,sigma,Rbuff);
-shiftRadialVector = smooth(smooth(shiftRadialVector,smoothFactor),smoothFactor);
+shiftRadialVector = movingAverageSmooth(movingAverageSmooth(shiftRadialVector,smoothFactor),smoothFactor);
 
 % construct metric using spherical symmetric solution: 
 % solve for B
@@ -125,60 +125,44 @@ for mu = 1:4
         Metric.tensor{mu,nu} = zeros(gridSize);
     end
 end
-ShiftMatrix = zeros(gridSize);
-
-% set offset value to handle r = 0
 epsilon = 0;
 
-for i = 1:gridSize(2)
-    for j = 1:gridSize(3)
-        for k = 1:gridSize(4)
+% Evaluate every grid point at once (previously a per-point triple loop).
+[I, J, K] = ndgrid(1:gridSize(2), 1:gridSize(3), 1:gridSize(4));
+x = I*gridScaling(2) - worldCenter(2);
+y = J*gridScaling(3) - worldCenter(3);
+z = K*gridScaling(4) - worldCenter(4);
 
-            x = ((i*gridScaling(2)-worldCenter(2)));
-            y = ((j*gridScaling(3)-worldCenter(3)));
-            z = ((k*gridScaling(4)-worldCenter(4)));
+r = sqrt(x.^2 + y.^2 + z.^2) + epsilon;
+theta = atan2(sqrt(x.^2 + y.^2), z);
+phi = atan2(y, x);
 
-            %ref Catalog of Spacetimes, Eq. (1.6.2) for coords def.
-            r = sqrt(x^2+y^2+z^2)+epsilon;
-            theta = atan2(sqrt(x^2+y^2),z);
-            phi = atan2(y,x);
+% Fractional index into rsample. rsample is uniform, so the lower bracketing sample is
+% found directly instead of by a nearest-neighbour search over all samples; the two
+% corrections reproduce the original rule (largest index with rsample(idx) <= r).
+dr = rsample(2) - rsample(1);
+idx = floor((r - rsample(1))/dr) + 1;
+idx = idx - (rsample(idx) > r);
+idx = idx + (rsample(idx + 1) <= r);
+minIdx = idx + (r - rsample(idx))./(rsample(idx + 1) - rsample(idx));
 
-            [~, minIdx] = min(abs(rsample-r));
-            if rsample(minIdx) > r
-                minIdx = minIdx - 1;
-            end
+g11_sph = legendreRadialInterp(A, minIdx);
+g22_sph = legendreRadialInterp(B, minIdx);
+[g11_cart, g22_cart, g23_cart, g24_cart, g33_cart, g34_cart, g44_cart] = sph2cartDiag(theta, phi, g11_sph, g22_sph);
 
-            minIdx = minIdx + (r-rsample(minIdx))/(rsample(minIdx+1)-rsample(minIdx));
+shape = [1, gridSize(2:4)];
+Metric.tensor{1,1} = reshape(g11_cart, shape);
+Metric.tensor{2,2} = reshape(g22_cart, shape);
+Metric.tensor{2,3} = reshape(g23_cart, shape);
+Metric.tensor{3,2} = Metric.tensor{2,3};
+Metric.tensor{2,4} = reshape(g24_cart, shape);
+Metric.tensor{4,2} = Metric.tensor{2,4};
+Metric.tensor{3,3} = reshape(g33_cart, shape);
+Metric.tensor{3,4} = reshape(g34_cart, shape);
+Metric.tensor{4,3} = Metric.tensor{3,4};
+Metric.tensor{4,4} = reshape(g44_cart, shape);
+ShiftMatrix = reshape(legendreRadialInterp(shiftRadialVector, minIdx), shape);
 
-            g11_sph = legendreRadialInterp(A,minIdx);
-            g22_sph = legendreRadialInterp(B,minIdx);
-
-            [g11_cart, g22_cart, g23_cart, g24_cart, g33_cart, g34_cart, g44_cart] = sph2cartDiag(theta,phi,g11_sph,g22_sph);
-
-            Metric.tensor{1,1}(1,i,j,k) = g11_cart;
-
-            Metric.tensor{2,2}(1,i,j,k) = g22_cart;
-
-            Metric.tensor{2,3}(1,i,j,k) = g23_cart;
-            Metric.tensor{3,2}(1,i,j,k) = Metric.tensor{2,3}(1,i,j,k);
-
-            Metric.tensor{2,4}(1,i,j,k) = g24_cart;
-            Metric.tensor{4,2}(1,i,j,k) = Metric.tensor{2,4}(1,i,j,k);
-
-            Metric.tensor{3,3}(1,i,j,k) = g33_cart;
-
-            Metric.tensor{3,4}(1,i,j,k) = g34_cart;
-            Metric.tensor{4,3}(1,i,j,k) = Metric.tensor{3,4}(1,i,j,k);
-
-            Metric.tensor{4,4}(1,i,j,k) = g44_cart; 
-
-            ShiftMatrix(1,i,j,k) = legendreRadialInterp(shiftRadialVector,minIdx);
-            
-        end
-    end
-end
-
-% Add warp effect
 if doWarp
     Metric.tensor{1,2} = Metric.tensor{1,2}-Metric.tensor{1,2}.*ShiftMatrix - ShiftMatrix*vWarp;
     Metric.tensor{2,1} = Metric.tensor{1,2};

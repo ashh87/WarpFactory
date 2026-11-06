@@ -105,9 +105,14 @@ end
 
 %% Find energy conditions
 
+% After doFrameTransfer the tensor holds orthonormal (Eulerian-frame) components, so every
+% index operation below must use the Minkowski metric, not the coordinate metric.
+metricMinkowski = metricGet_Minkowski([a, b, c, d]);
+metricMinkowski = changeTensorIndex(metricMinkowski, "covariant");
+
 % Null energy condition
 if strcmpi(condition, "Null")
-    energyTensor = changeTensorIndex(energyTensor, "covariant", metric); % double check that it is covariant
+    energyTensor = changeTensorIndex(energyTensor, "covariant", metricMinkowski);
 
     for ii = 1:numAngularVec
         if isgpuarray(metric.tensor{1, 1})
@@ -128,7 +133,7 @@ if strcmpi(condition, "Null")
 
     % Weak energy condition
 elseif strcmpi(condition, "Weak")
-    energyTensor = changeTensorIndex(energyTensor, "covariant", metric); % double check that it is covariant
+    energyTensor = changeTensorIndex(energyTensor, "covariant", metricMinkowski);
     for jj = 1:numTimeVec
         for ii = 1:numAngularVec
             if isgpuarray(metric.tensor{1, 1})
@@ -151,10 +156,6 @@ elseif strcmpi(condition, "Weak")
 
     % Dominant energy condition
 elseif strcmpi(condition, "Dominant")
-    % Build minkowski reference metric
-    metricMinkowski = metricGet_Minkowski([a, b, c, d]);
-    metricMinkowski = changeTensorIndex(metricMinkowski, "covariant"); %make sure it is covariant
-
     energyTensor = changeTensorIndex(energyTensor, "mixedupdown", metricMinkowski); % convert to mixed up down with minkowski
 
     for ii = 1:numAngularVec
@@ -178,6 +179,11 @@ elseif strcmpi(condition, "Dominant")
         diff = getInnerProduct(vector, vector, metricMinkowski);
         diff = sign(diff) .* sqrt(abs(diff));
 
+        % The flux must also be future-directed: a past-directed flux (negative energy
+        % density seen by the null observer) violates the DEC even when it is causal.
+        pastDirected = temp(:, :, :, :, 1) < 0;
+        diff(pastDirected) = abs(diff(pastDirected));
+
         map = max(map, diff);
         if returnVec == 1
             vec(:, :, :, :, ii) = diff;
@@ -193,10 +199,6 @@ elseif strcmpi(condition, "Dominant")
 
     % Strong energy condition
 elseif strcmpi(condition, "Strong")
-    % Build minkowski reference metric
-    metricMinkowski = metricGet_Minkowski([a, b, c, d]);
-    metricMinkowski = changeTensorIndex(metricMinkowski, "covariant");
-
     % Make sure the energy tensor is covariant
     energyTensor = changeTensorIndex(energyTensor, "covariant", metricMinkowski);
 
